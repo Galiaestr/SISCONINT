@@ -50,6 +50,11 @@ class BaseConfig:
     JWT_COOKIE_SECURE = True
     JWT_COOKIE_SAMESITE = os.getenv("COOKIE_SAMESITE", "Lax")
     JWT_COOKIE_CSRF_PROTECT = True  # doble token: cabecera X-CSRF-TOKEN en POST/PUT/PATCH/DELETE
+    JWT_BLOCKLIST_ENABLED = True
+    JWT_BLOCKLIST_TOKEN_CHECKS = ["access", "refresh"]
+
+    # --- Redis (jti revocados en logout, HU_04) -----------------------
+    REDIS_URL = os.getenv("REDIS_URL", "")
 
     # --- CORS / frontend ----------------------------------------------
     FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
@@ -82,6 +87,7 @@ class TestingConfig(BaseConfig):
     SQLALCHEMY_ENGINE_OPTIONS: dict = {}
     JWT_SECRET_KEY = "test-secret-key-with-enough-length-for-hs256"
     JWT_COOKIE_SECURE = False
+    REDIS_URL = ""  # lista de jti en memoria: las pruebas no dependen de Redis
     MAIL_SERVER = "localhost"
     MAIL_SUPPRESS_SEND = True
     FRONTEND_URL = "http://frontend.test"

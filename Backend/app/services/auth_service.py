@@ -1,15 +1,21 @@
-"""HU_01: inicio de sesión. Lógica de negocio, no conoce HTTP."""
+"""HU_01 / HU_04: inicio y cierre de sesión. Lógica de negocio, no conoce HTTP."""
 from datetime import timedelta, timezone
 from math import ceil
 
 from flask import current_app
 
 from app.core.datetime_utils import utcnow
-from app.core.errors import AccountDisabledError, AccountLockedError, InvalidCredentialsError
-from app.core.security import verify_password
+from app.core.errors import (
+    AccountDisabledError,
+    AccountLockedError,
+    InvalidCredentialsError,
+    TimerActiveError,
+)
+from app.core.security import revoke_jti, verify_password
 from app.extensions import db
 from app.models.user import Colaborador
 from app.repositories import auth_repository, user_repository
+from app.services import time_service
 
 
 def login(correo: str, password: str, ip: str | None) -> Colaborador:
@@ -46,6 +52,29 @@ def login(correo: str, password: str, ip: str | None) -> Colaborador:
     auth_repository.add_attempt(correo, True, user.id, ip)  # un éxito reinicia la racha de fallos
     db.session.commit()
     return user
+
+
+def logout(
+    user_id: int,
+    access_jti: str,
+    access_exp: int,
+    refresh_jti: str | None = None,
+    refresh_exp: int | None = None,
+) -> None:
+    """HU_04: invalida de inmediato el access (y el refresh, si viene) en la lista de revocados.
+
+    Si hay temporizador activo no se revoca nada: el cliente debe detenerlo y guardarlo antes.
+    """
+    if time_service.get_active_timer(user_id):
+        raise TimerActiveError()
+
+    revoke_jti(access_jti, _ttl_seconds(access_exp))
+    if refresh_jti and refresh_exp:
+        revoke_jti(refresh_jti, _ttl_seconds(refresh_exp))
+
+
+def _ttl_seconds(exp: int) -> int:
+    return max(1, int(exp - utcnow().timestamp()))
 
 
 def _lock_remaining_seconds(correo: str) -> int:

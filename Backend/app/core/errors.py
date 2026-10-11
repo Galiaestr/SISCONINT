@@ -91,6 +91,15 @@ class ConflictError(AppError):
     default_message = "Conflicto con el estado actual del recurso"
 
 
+class TimerActiveError(ConflictError):
+    """HU_04: no se cierra la sesión si el colaborador tiene un temporizador corriendo."""
+
+    code = "TIMER_ACTIVE"
+    default_message = (
+        "Tienes un temporizador activo. Deténlo y guárdalo antes de cerrar sesión"
+    )
+
+
 def error_response(
     status: int,
     code: str,
@@ -171,3 +180,13 @@ def register_jwt_handlers():
         return error_response(
             401, "SESSION_EXPIRED", "Tu sesión expiró. Inicia sesión de nuevo"
         )
+
+    @jwt.revoked_token_loader
+    def _revoked(_header, _payload):
+        return error_response(401, "UNAUTHORIZED", "Sesión no válida")
+
+    @jwt.token_in_blocklist_loader
+    def _blocklisted(_header, payload: dict) -> bool:
+        from app.core.security import jti_is_revoked
+
+        return jti_is_revoked(payload.get("jti", ""))

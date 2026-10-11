@@ -2,6 +2,7 @@ from flask import Flask
 
 from app.config import get_config
 from app.core.errors import register_error_handlers, register_jwt_handlers
+from app.core.security import init_token_blocklist
 from app.extensions import cors, db, jwt, mail
 
 
@@ -20,6 +21,7 @@ def create_app(config_name: str | None = None, overrides: dict | None = None) ->
     db.init_app(app)
     jwt.init_app(app)
     mail.init_app(app)
+    init_token_blocklist(app)
     cors.init_app(
         app,
         resources={r"/api/*": {"origins": [app.config["FRONTEND_URL"]]}},

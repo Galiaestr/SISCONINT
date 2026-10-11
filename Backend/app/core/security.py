@@ -1,11 +1,69 @@
 import hashlib
 import secrets
+import time
 from functools import lru_cache
 
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
+from flask import current_app
 
 _hasher = PasswordHasher()  # argon2id con parámetros recomendados
+
+
+# ---------------------------------------------------------------- lista de jti revocados (HU_04)
+class _MemoryBlocklist:
+    """Reserva para pruebas y entornos sin Redis. TTL igual que en Redis."""
+
+    def __init__(self):
+        self._store: dict[str, float] = {}
+
+    def add(self, jti: str, ttl: int) -> None:
+        self._store[jti] = time.time() + max(1, ttl)
+
+    def contains(self, jti: str) -> bool:
+        expires_at = self._store.get(jti)
+        if expires_at is None:
+            return False
+        if expires_at < time.time():
+            del self._store[jti]
+            return False
+        return True
+
+
+class _RedisBlocklist:
+    """Arquitectura 3.4: jti revocados en Redis (logout, cambio de rol, etc.)."""
+
+    def __init__(self, url: str):
+        import redis
+
+        self._redis = redis.Redis.from_url(url, decode_responses=True)
+
+    def add(self, jti: str, ttl: int) -> None:
+        self._redis.set(f"jwt:revoked:{jti}", "1", ex=max(1, ttl))
+
+    def contains(self, jti: str) -> bool:
+        return self._redis.get(f"jwt:revoked:{jti}") is not None
+
+
+def init_token_blocklist(app) -> None:
+    url = (app.config.get("REDIS_URL") or "").strip()
+    if app.config.get("TESTING") or not url:
+        app.extensions["token_blocklist"] = _MemoryBlocklist()
+    else:
+        app.extensions["token_blocklist"] = _RedisBlocklist(url)
+
+
+def revoke_jti(jti: str, ttl_seconds: int) -> None:
+    if not jti:
+        return
+    current_app.extensions["token_blocklist"].add(jti, ttl_seconds)
+
+
+def jti_is_revoked(jti: str) -> bool:
+    if not jti:
+        return False
+    store = current_app.extensions.get("token_blocklist")
+    return bool(store and store.contains(jti))
 
 
 # ---------------------------------------------------------------- tokens de un solo uso

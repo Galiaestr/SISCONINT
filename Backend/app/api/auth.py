@@ -3,6 +3,9 @@ from flask import Blueprint, current_app, g, jsonify, request
 from flask_jwt_extended import (
     create_access_token,
     create_refresh_token,
+    decode_token,
+    get_jwt,
+    get_jwt_identity,
     jwt_required,
     set_access_cookies,
     set_refresh_cookies,
@@ -11,6 +14,7 @@ from flask_jwt_extended import (
 
 from app.core.errors import ValidationAppError
 from app.core.permissions import load_current_user, login_required
+from app.core.responses import ok
 from app.schemas.auth_schema import LoginSchema, SessionUserSchema
 from app.services import auth_service
 
@@ -61,8 +65,32 @@ def me():
 
 
 @bp.post("/logout")
+@jwt_required()
 def logout():
-    """Borra las cookies de sesión. La invalidación en servidor (lista de revocados) llega con HU_04."""
-    response = jsonify({"data": {"message": "Sesión cerrada"}})
+    """HU_04: invalida el token en servidor y borra las cookies de sesión."""
+    access = get_jwt()
+    refresh_jti, refresh_exp = _refresh_claims()
+    auth_service.logout(
+        int(get_jwt_identity()),
+        access["jti"],
+        access["exp"],
+        refresh_jti,
+        refresh_exp,
+    )
+    response, status = ok({"message": "Sesión cerrada correctamente"})
     unset_jwt_cookies(response)
-    return response
+    return response, status
+
+
+def _refresh_claims() -> tuple[str | None, int | None]:
+    """Lee el refresh de la cookie (si viaja) para revocarlo junto con el access."""
+    raw = request.cookies.get(current_app.config["JWT_REFRESH_COOKIE_NAME"])
+    if not raw:
+        return None, None
+    try:
+        payload = decode_token(raw, allow_expired=True)
+    except Exception:
+        return None, None
+    if payload.get("type") != "refresh":
+        return None, None
+    return payload.get("jti"), payload.get("exp")
