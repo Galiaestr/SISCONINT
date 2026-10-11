@@ -38,13 +38,18 @@ class BaseConfig:
         "connect_args": {"sslmode": os.getenv("DB_SSLMODE", "require")},
     }
 
-    # --- JWT / sesión (RG-06: 30 min de inactividad) ------------------
+        # --- JWT en cookies httpOnly (HU_01, RG-06) ------------------------
     JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "")
-    JWT_TOKEN_LOCATION = ["headers", "cookies"]
-    JWT_ACCESS_TOKEN_EXPIRES = timedelta(minutes=30)
+    JWT_TOKEN_LOCATION = ["headers", "cookies"]  # headers: solo para pruebas con dev-token
+    JWT_ACCESS_TOKEN_EXPIRES = timedelta(minutes=15)
+    JWT_REFRESH_TOKEN_EXPIRES = timedelta(minutes=30)
+    JWT_ACCESS_COOKIE_NAME = "SISCONNI_access_token"
+    JWT_REFRESH_COOKIE_NAME = "SISCONNI_refresh_token"
+    JWT_ACCESS_COOKIE_PATH = "/"
+    JWT_REFRESH_COOKIE_PATH = "/api/v1/auth"  # el refresh solo viaja a los endpoints de auth
     JWT_COOKIE_SECURE = True
-    JWT_COOKIE_SAMESITE = "Lax"
-    JWT_COOKIE_CSRF_PROTECT = True
+    JWT_COOKIE_SAMESITE = os.getenv("COOKIE_SAMESITE", "Lax")
+    JWT_COOKIE_CSRF_PROTECT = True  # doble token: cabecera X-CSRF-TOKEN en POST/PUT/PATCH/DELETE
 
     # --- CORS / frontend ----------------------------------------------
     FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
@@ -59,6 +64,8 @@ class BaseConfig:
 
     # --- Reglas de negocio ---------------------------------------------
     ACTIVATION_LINK_HOURS = 48  # HU_05
+    LOGIN_MAX_ATTEMPTS = 5  # HU_01: fallos consecutivos que bloquean la cuenta
+    LOGIN_LOCK_MINUTES = 15  # HU_01: duración del bloqueo
 
 
 class DevelopmentConfig(BaseConfig):
