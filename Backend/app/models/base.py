@@ -1,4 +1,4 @@
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, INET
 
 from app.core.datetime_utils import utcnow
 from app.extensions import db
@@ -6,7 +6,7 @@ from app.extensions import db
 # BIGINT identity en PostgreSQL; INTEGER en SQLite para que autoincremente en pruebas.
 BigId = db.BigInteger().with_variant(db.Integer(), "sqlite")
 JsonType = db.JSON().with_variant(JSONB(), "postgresql")
-
+InetType = INET().with_variant(db.String(45), "sqlite")
 
 class TimestampMixin:
     """RG-13: created_at/updated_at. updated_at también lo mantiene un trigger en la base."""

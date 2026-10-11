@@ -1,12 +1,16 @@
 """Excepciones de dominio y manejadores globales (contrato único de errores)."""
+from math import ceil
+
 from flask import jsonify
 from marshmallow import ValidationError as MarshmallowValidationError
 from werkzeug.exceptions import HTTPException
 
 from app.extensions import jwt
 
-MSG_FORBIDDEN = "No tienes permiso para esta acción"  # RG-02
-MSG_REQUIRED = "Campo obligatorio"  # RG-09
+MSG_FORBIDDEN = "No tienes permiso para esta acción"
+MSG_REQUIRED = "Campo obligatorio"
+MSG_INVALID_CREDENTIALS = "Correo o contraseña incorrectos"
+MSG_ACCOUNT_DISABLED = "Cuenta desactivada. Contacta al Administrador"
 
 
 class AppError(Exception):
@@ -14,10 +18,16 @@ class AppError(Exception):
     code = "BAD_REQUEST"
     default_message = "Solicitud no válida"
 
-    def __init__(self, message: str | None = None, fields: dict | None = None):
+    def __init__(
+        self,
+        message: str | None = None,
+        fields: dict | None = None,
+        extra: dict | None = None,
+    ):
         super().__init__(message or self.default_message)
         self.message = message or self.default_message
         self.fields = fields
+        self.extra = extra
 
 
 class ValidationAppError(AppError):
@@ -32,10 +42,41 @@ class UnauthorizedError(AppError):
     default_message = "Sesión no válida"
 
 
+class InvalidCredentialsError(UnauthorizedError):
+    """Correo inexistente y contraseña incorrecta comparten el mismo mensaje."""
+
+    code = "INVALID_CREDENTIALS"
+    default_message = MSG_INVALID_CREDENTIALS
+
+
 class ForbiddenError(AppError):
     status = 403
     code = "FORBIDDEN"
     default_message = MSG_FORBIDDEN
+
+
+class AccountDisabledError(ForbiddenError):
+    """La cuenta del colaborador está desactivada."""
+
+    code = "ACCOUNT_DISABLED"
+    default_message = MSG_ACCOUNT_DISABLED
+
+
+class AccountLockedError(AppError):
+    """Bloqueo temporal por intentos fallidos de inicio de sesión."""
+
+    status = 423
+    code = "ACCOUNT_LOCKED"
+
+    def __init__(self, retry_after_seconds: int):
+        minutes = max(1, ceil(retry_after_seconds / 60))
+        unit = "minuto" if minutes == 1 else "minutos"
+
+        super().__init__(
+            f"Cuenta bloqueada por intentos fallidos. "
+            f"Intenta de nuevo en {minutes} {unit}",
+            extra={"retry_after_seconds": retry_after_seconds},
+        )
 
 
 class NotFoundError(AppError):
@@ -50,15 +91,23 @@ class ConflictError(AppError):
     default_message = "Conflicto con el estado actual del recurso"
 
 
-def error_response(status: int, code: str, message: str, fields: dict | None = None):
+def error_response(
+    status: int,
+    code: str,
+    message: str,
+    fields: dict | None = None,
+    extra: dict | None = None,
+):
     body: dict = {"error": {"code": code, "message": message}}
     if fields:
         body["error"]["fields"] = fields
+    if extra:
+        body["error"].update(extra)
     return jsonify(body), status
 
 
 def _flatten_marshmallow(messages) -> dict:
-    """Convierte los errores de marshmallow a {campo: [mensajes]}."""
+    """Convierte los errores de Marshmallow a {campo: [mensajes]}."""
     fields: dict = {}
     if isinstance(messages, dict):
         for key, value in messages.items():
@@ -71,23 +120,41 @@ def _flatten_marshmallow(messages) -> dict:
 def register_error_handlers(app):
     @app.errorhandler(AppError)
     def handle_app_error(err: AppError):
-        return error_response(err.status, err.code, err.message, err.fields)
+        response, status = error_response(
+            err.status, err.code, err.message, err.fields, err.extra
+        )
+        if err.extra and "retry_after_seconds" in err.extra:
+            response.headers["Retry-After"] = str(err.extra["retry_after_seconds"])
+        return response, status
 
     @app.errorhandler(MarshmallowValidationError)
     def handle_validation_error(err: MarshmallowValidationError):
         return error_response(
-            422, "VALIDATION_ERROR", "Hay campos con errores", _flatten_marshmallow(err.messages)
+            422,
+            "VALIDATION_ERROR",
+            "Hay campos con errores",
+            _flatten_marshmallow(err.messages),
         )
 
     @app.errorhandler(HTTPException)
     def handle_http_exception(err: HTTPException):
-        codes = {404: "NOT_FOUND", 405: "METHOD_NOT_ALLOWED", 415: "UNSUPPORTED_MEDIA_TYPE"}
-        return error_response(err.code or 500, codes.get(err.code, "HTTP_ERROR"), err.description or err.name)
+        codes = {
+            404: "NOT_FOUND",
+            405: "METHOD_NOT_ALLOWED",
+            415: "UNSUPPORTED_MEDIA_TYPE",
+        }
+        return error_response(
+            err.code or 500,
+            codes.get(err.code, "HTTP_ERROR"),
+            err.description or err.name,
+        )
 
     @app.errorhandler(Exception)
     def handle_unexpected(err: Exception):
         app.logger.exception("Error no controlado")
-        return error_response(500, "INTERNAL_ERROR", "Ocurrió un error inesperado")
+        return error_response(
+            500, "INTERNAL_ERROR", "Ocurrió un error inesperado"
+        )
 
 
 def register_jwt_handlers():
@@ -101,4 +168,6 @@ def register_jwt_handlers():
 
     @jwt.expired_token_loader
     def _expired(_header, _payload):
-        return error_response(401, "SESSION_EXPIRED", "Tu sesión expiró. Inicia sesión de nuevo")
+        return error_response(
+            401, "SESSION_EXPIRED", "Tu sesión expiró. Inicia sesión de nuevo"
+        )

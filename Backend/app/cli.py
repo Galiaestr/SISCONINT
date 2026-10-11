@@ -1,4 +1,4 @@
-"""Comandos de apoyo:  flask seed-owner  |  flask dev-token."""
+"""Comandos de apoyo:  flask seed-owner | set-password | dev-token."""
 import click
 from flask import current_app
 from flask_jwt_extended import create_access_token
@@ -6,9 +6,19 @@ from marshmallow import ValidationError
 from sqlalchemy import func, select
 
 from app.core import audit
+from app.core.security import hash_password, password_policy_errors
 from app.extensions import db
 from app.models.user import ESTATUS_ACTIVO, ROL_DUENO, Colaborador
 from app.schemas.user_schema import ColaboradorCreateSchema
+
+
+def _find_user(correo: str) -> Colaborador | None:
+    return db.session.execute(
+        select(Colaborador).where(
+            func.lower(Colaborador.correo_institucional) == correo.strip().lower(),
+            Colaborador.deleted_at.is_(None),
+        )
+    ).scalar_one_or_none()
 
 
 def register_cli(app):
@@ -20,7 +30,7 @@ def register_cli(app):
     @click.option("--emergencia-nombre", prompt="Nombre del contacto de emergencia")
     @click.option("--emergencia-telefono", prompt="Teléfono de emergencia (10 dígitos)")
     def seed_owner(nombre, correo, telefono_despacho, telefono_personal, emergencia_nombre, emergencia_telefono):
-        """Crea el primer usuario Dueño (sin contraseña; el login llega con HU_01)."""
+        """Crea el primer usuario Dueño (sin contraseña: usa después `flask set-password`)."""
         try:
             data = ColaboradorCreateSchema().load(
                 {
@@ -37,10 +47,7 @@ def register_cli(app):
         except ValidationError as err:
             raise click.ClickException(f"Datos no válidos: {err.messages}")
 
-        exists = db.session.execute(
-            select(Colaborador.id).where(func.lower(Colaborador.correo_institucional) == data["correo_institucional"])
-        ).first()
-        if exists:
+        if _find_user(data["correo_institucional"]):
             raise click.ClickException("Ya existe un colaborador con ese correo")
 
         owner = Colaborador(**data, estatus=ESTATUS_ACTIVO)
@@ -48,17 +55,33 @@ def register_cli(app):
         db.session.flush()
         audit.log(None, "colaborador", owner.id, audit.CREAR, {"origen": "seed-owner", "rol": ROL_DUENO})
         db.session.commit()
-        click.echo(f"Dueño creado (id={owner.id}).")
+        click.echo(f"Dueño creado (id={owner.id}). Define su contraseña con: flask --app wsgi set-password")
+
+    @app.cli.command("set-password")
+    @click.option("--correo", prompt="Correo del colaborador")
+    @click.password_option("--password", prompt="Nueva contraseña", confirmation_prompt=True)
+    def set_password(correo, password):
+        """Define la contraseña (hash argon2) de un colaborador. Cumple la política RG-05."""
+        user = _find_user(correo)
+        if user is None:
+            raise click.ClickException("Colaborador no encontrado")
+
+        problems = password_policy_errors(password, user.correo_institucional)
+        if problems:
+            raise click.ClickException("Contraseña no válida: " + "; ".join(problems))
+
+        user.password_hash = hash_password(password)
+        audit.log(None, "colaborador", user.id, audit.MODIFICAR, {"campo": "password", "origen": "set-password"})
+        db.session.commit()
+        click.echo(f"Contraseña actualizada para {user.correo_institucional}.")
 
     @app.cli.command("dev-token")
     @click.option("--correo", required=True)
     def dev_token(correo):
-        """Imprime un JWT de acceso (30 min) para probar la API mientras no exista el login."""
+        """Imprime un JWT de acceso para probar con la cabecera Authorization (sin cookies)."""
         if current_app.config["ENV_NAME"] == "production":
             raise click.ClickException("Deshabilitado en producción")
-        user = db.session.execute(
-            select(Colaborador).where(func.lower(Colaborador.correo_institucional) == correo.lower())
-        ).scalar_one_or_none()
+        user = _find_user(correo)
         if user is None or not user.activo:
             raise click.ClickException("Colaborador no encontrado o inactivo")
         click.echo(create_access_token(identity=str(user.id)))

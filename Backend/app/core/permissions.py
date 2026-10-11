@@ -35,7 +35,8 @@ def can_assign_role(actor_rol: str, target_rol: str) -> bool:
     return target_rol in ASSIGNABLE_ROLES.get(actor_rol, frozenset())
 
 
-def _load_current_user() -> Colaborador:
+def load_current_user() -> Colaborador:
+    """Usuario del JWT ya validado. 401 si la cuenta ya no existe o está desactivada."""
     try:
         user_id = int(get_jwt_identity())
     except (TypeError, ValueError):
@@ -46,6 +47,18 @@ def _load_current_user() -> Colaborador:
     return user
 
 
+def login_required(fn):
+    """Exige sesión válida (cookie o cabecera) y deja al usuario en g.current_user."""
+
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        verify_jwt_in_request()
+        g.current_user = load_current_user()
+        return fn(*args, **kwargs)
+
+    return wrapper
+
+
 def require_permission(permission: str):
     """Valida el JWT, carga al usuario en g.current_user y exige el permiso (RG-02)."""
 
@@ -53,7 +66,7 @@ def require_permission(permission: str):
         @wraps(fn)
         def wrapper(*args, **kwargs):
             verify_jwt_in_request()
-            user = _load_current_user()
+            user = load_current_user()
             if not has_permission(user.rol, permission):
                 raise ForbiddenError()
             g.current_user = user
