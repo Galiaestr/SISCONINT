@@ -20,3 +20,8 @@ def add(user: Colaborador) -> Colaborador:
 def add_activation_link(link: EnlaceActivacion) -> EnlaceActivacion:
     db.session.add(link)
     return link
+
+def get_by_email(correo: str) -> Colaborador | None:
+    """Busca y retorna un colaborador por su correo institucional."""
+    stmt = select(Colaborador).where(func.lower(Colaborador.correo_institucional) == correo.lower())
+    return db.session.execute(stmt).scalar_one_or_none()
